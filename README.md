@@ -39,6 +39,19 @@ al-chat --model /home/xyz/Qwen3-4B-Q4_0.gguf
 al-ppl --model /home/xyz/Qwen3-4B-Q4_0.gguf --prompt "Good morning, Miss Lee!"
 ```
 
+Build from source code:
+```sh
+git clone https://github.com/OpenBMB/ArcLight.git
+cd ArcLight
+
+mkdir build && cd build
+cmake ..
+make -j 32
+```
+
+Make sure that your machine has the related toolkit, e.g., GCC/G++ (at least supporting C++ 17).
+
+
 ## 💻 Command-line Arguments
 
 Currently, we provide the essential command-line arguments required to run inference. Please use them according to the descriptions below.
