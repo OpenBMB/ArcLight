@@ -5,6 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/OpenBMB/ArcLight)](https://github.com/OpenBMB/ArcLight/releases)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)](https://isocpp.org/)
 
 ArcLight: A Lightweight LLM Inference Framework
 
