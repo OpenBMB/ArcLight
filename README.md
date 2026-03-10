@@ -75,7 +75,7 @@ We support to inference mode now, i.e. single node mode and multi-node mode. The
 - `--numa none`: single node mode. We prioritize using all cores on the NUMA node where the program is launched. However, if the number of threads specified exceeds the cores available on a single node, cores from other nodes *will also be used*, which may **impact performance**.
 - `--numa tp`: multi-node tensor parallelism. Use cross-node tensor parallelism. Tensors and threads are evenly distributed across NUMA nodes to achieve **maximum performance**. Please note that the number of nodes to use must be set with `--nodes N`, and currently it must be a power of 2.
 
-We also pretend to support pipeline parallelism in the fure. Hence the argument `--numa pp` can be use soon. 
+We also pretend two support pipeline parallelism in the fure. Hence the argument `--numa pp` can be use soon. 
 
 The current v1.0 release requires manually setting the sizes of various buffers, including weight, activation, KV cache, and thread group workspace, with the unit in GB. For example, one usage is `--w_gb 4 --a_gb 8 --kv_gb 2 --work_gb 2`. We will soon integrate functionality to automatically detect and configure these buffers.
 
