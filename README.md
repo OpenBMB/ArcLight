@@ -31,7 +31,7 @@ Example command:
 
 ```sh
 # Use a local model to generate
-al-gen --model /home/xyz/Qwen3-4B-Q4_0.gguf --promt "Hello!"
+al-gen --model /home/xyz/Qwen3-4B-Q4_0.gguf --prompt "Hello!"
 
 # Or chat with model
 al-chat --model /home/xyz/Qwen3-4B-Q4_0.gguf
