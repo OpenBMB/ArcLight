@@ -1,7 +1,6 @@
 # ✨ArcLight
 
-![logo](assets/logo.png)
-<!-- https://github.com/user-attachments/assets/c3080356-4f4b-4cb0-a873-d1da01e3fc42 -->
+![logo](https://github.com/user-attachments/assets/5249801e-02ea-4c10-ba81-2d36e8b26e87)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/OpenBMB/ArcLight)](https://github.com/OpenBMB/ArcLight/releases)
@@ -11,7 +10,8 @@ ArcLight: A Lightweight LLM Inference Framework
 
 ## 🤩 What's this?
 
-![logo](assets/arch.png)
+![logo](https://github.com/user-attachments/assets/2b836ebb-ec57-41bc-aa3e-059efe983292)
+
 
 **ArcLight** is designed to building a **lightweight**, **easily optimized**, unified memory-oriented LLM inference framework in **C/C++**. **Unified memory** refers to the possible heterogeneous computing units sharing the same physical main memory. In other words, ArcLight will be adaptable to all inference scenarios beyond high-performance GPU servers in the future.
 
