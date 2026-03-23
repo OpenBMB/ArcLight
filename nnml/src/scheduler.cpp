@@ -121,8 +121,15 @@ void nnml_compute_node(nnml_tensor * node, const nnml_compute_state * params) {
 
 void nnml_single_graph_compute_thread(void * data) {
     nnml_compute_state * state = (nnml_compute_state *) data;
+
+    // if (state->ith == 0) {
+    //     sleep(1);
+    //     single_graph->get_t_out_ids()->print_data(16, true);
+    // }
     
     for (int node_n = 0; node_n < single_graph->get_n_nodes();) {
+
+        // if (node_n > 50) abort();
 
         nnml_tensor * node = single_graph->get_nth_cnode(node_n)->tensor;
 
@@ -131,6 +138,49 @@ void nnml_single_graph_compute_thread(void * data) {
         }
 
         nnml_compute_node(node, state);
+
+        // if (state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "self_kq_mask-N0 (copy)") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(512, true);
+        // }
+
+        // if (strcmp(node->get_name_cstr(), "Qcur-0-N0") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->save_data("/home/modelbest/llama.cpp/qcur_rope.bin");
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "attn_out-23-N0") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "out_debug-23") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "outsa_debug-23") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "ffn_inp-23") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "ffn_out-23") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "result_norm--1") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
+        // if (strcmp(node->get_name_cstr(), "result_output--1") == 0 && state->ith == 0) {
+        //     sleep(1);
+        //     node->print_data(16, true);
+        // }
 
         if (node_n + 1 < single_graph->get_n_nodes()) {
             if (node->get_operation() == NNML_OP_SCATTER_PRE || node->get_operation() == NNML_OP_GATHER) {

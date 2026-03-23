@@ -358,7 +358,10 @@ void nnml_vec_swiglu_f16(const int n, nnml_fp16_t * y, const nnml_fp16_t * x, co
 
 
 // vector functions declarations
-inline static void nnml_vec_cpy_f32 (const int n, float * y, const float * x)               { for (int i = 0; i < n; ++i) y[i]  = x[i]; }
+inline static void nnml_vec_cpy_f32 (const int n, float * y, const float * x)               { for (int i = 0; i < n; ++i) y[i]  = x[i]; 
+// for (int i = 0; i < 16; ++i) printf("%.4f ", y[i]);
+// printf("\n");
+}
 inline static void nnml_vec_acc_f32 (const int n, float * y, const float * x)               { for (int i = 0; i < n; ++i) y[i] += x[i]; }
 void nnml_vec_max_f32(const int n, float * s, const float * x);
 void nnml_vec_add_f32(float * dst, const float ** srcs, int n_srcs, size_t n);

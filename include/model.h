@@ -43,6 +43,7 @@ enum llm_hparams_item {
     LLM_TOKENIZER_MODEL,                 // there properties are implemented in tokenizer.h
     LLM_TOKENIZER_PRE_MODEL,
     LLM_TOKENIZER_TOKENS,
+    LLM_TOKENIZER_SCORES,
     LLM_TOKENIZER_TOKEN_TYPE,
     LLM_TOKENIZER_MERGES,
     LLM_TOKENIZER_EOS_ID,
@@ -50,6 +51,9 @@ enum llm_hparams_item {
     LLM_TOKENIZER_UNK_ID,
     LLM_TOKENIZER_PAD_ID,
     LLM_TOKENIZER_ADD_BOS,
+    LLM_TOKENIZER_ADD_EOS,
+    LLM_TOKENIZER_ADD_SEP,
+    LLM_TOKENIZER_ADD_SPA,
     LLM_TOKENIZER_CHAT_TMPL,
     LLM_VOCAB_TYPE,
     LLM_QUANT_VERSION
@@ -71,6 +75,8 @@ enum llm_weight_item {
     LLM_FFN_UP,
     LLM_FFN_DOWN,
     LLM_FFN_NORM,
+    LLM_ROPE_LONG,
+    LLM_ROPE_SHORT,
 };
 
 // weight slicing strategy
@@ -95,6 +101,9 @@ enum layer_tensor_type {
 
 struct llm_layer {
     nnml_tensor ** tensors[LAYER_TENSOR_COUNT]{};
+    nnml_tensor *  rope_short      = nullptr;
+    nnml_tensor *  rope_long       = nullptr;
+    nnml_tensor *  rope_freqs      = nullptr;
 
     void alloc_all(size_t n_nodes) {
         for (int i = 0; i < LAYER_TENSOR_COUNT; i++) {
@@ -154,6 +163,9 @@ struct llm_model {
     nnml_tensor * tok_embd        = nullptr;
     nnml_tensor * output_norm     = nullptr;
     nnml_tensor * output          = nullptr;
+    nnml_tensor * rope_freqs      = nullptr;
+    nnml_tensor * rope_short      = nullptr;
+    nnml_tensor * rope_long       = nullptr;
 
     std::vector<llm_layer> layers;
 
@@ -162,7 +174,8 @@ struct llm_model {
     bool load_all_tensors(std::map<std::string, llm_weight_item> & weight_map, nnml_memory_t& mem);
     void set_asm_gemm(nnml_tensor ** tensors);
 
-    size_t get_n_tensors() const;
+    size_t        get_n_tensors() const;
+    nnml_tensor * get_rope_factors(int32_t il) const;
     // const nnml_tensor * get_tensor(const char * name) const;         // for debug in the future
     // void print_info() const;                                         // for debug in the future
 

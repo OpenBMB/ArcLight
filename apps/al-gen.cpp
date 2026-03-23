@@ -122,6 +122,9 @@ int32_t main(int32_t argc, char** argv) {
     std::vector<chat_msg> msgs = { msg };
     std::string prompt_in = apply_template(model.name, msgs, true, false);
     std::vector<llm_token> encoded = common_tokenize(&model.tokenizer, prompt_in, false, true);
+    // encoded.clear();
+    // encoded.push_back(100);
+    // encoded.push_back(101);
     
     // decoding context
     printf("> %s\n", prompt.c_str());

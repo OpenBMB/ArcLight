@@ -178,6 +178,17 @@ void llm_model::load_gguf_kv(bool is_print) {
                         LLM_LOG(is_print, "tokens...\n");
                         break;
                     }
+                    case LLM_TOKENIZER_SCORES: {
+                        tokenizer_data.has_score = true;
+                        std::vector<float> token_scores;
+                        read_array_f32(f, token_scores);
+                        assert(token_scores.size() == tokenizer_data.vocab.size());
+                        for (size_t j = 0; j < token_scores.size(); ++j) {
+                            tokenizer_data.vocab[j].score = token_scores[j];
+                        }
+                        LLM_LOG(is_print, "token scores...\n");
+                        break;
+                    }
                     case LLM_TOKENIZER_TOKEN_TYPE: {
                         tokenizer_data.has_type = true;
                         std::vector<int32_t> token_types;
@@ -288,10 +299,29 @@ void llm_model::load_gguf_kv(bool is_print) {
                         tokenizer_data.pad_id = r_u32(f);
                         LLM_LOG(is_print, "%u\n", tokenizer_data.pad_id);
                         break;
+                    case LLM_TOKENIZER_UNK_ID:
+                        tokenizer_data.unk_id = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", tokenizer_data.unk_id);
+                        break;
                     case LLM_TOKENIZER_ADD_BOS:
                         tokenizer_data.add_bos = (bool)r_u8(f);
                         tokenizer_data.read_add_bos = true;
                         LLM_LOG(is_print, "%u\n", tokenizer_data.add_bos);
+                        break;
+                    case LLM_TOKENIZER_ADD_EOS:
+                        tokenizer_data.add_eos = (bool)r_u8(f);
+                        tokenizer_data.read_add_eos = true;
+                        LLM_LOG(is_print, "%u\n", tokenizer_data.add_eos);
+                        break;
+                    case LLM_TOKENIZER_ADD_SEP:
+                        tokenizer_data.add_sep = (bool)r_u8(f);
+                        tokenizer_data.read_add_sep = true;
+                        LLM_LOG(is_print, "%u\n", tokenizer_data.add_sep);
+                        break;
+                    case LLM_TOKENIZER_ADD_SPA:
+                        tokenizer_data.add_space_prefix = (bool)r_u8(f);
+                        tokenizer_data.read_add_space_prefix = true;
+                        LLM_LOG(is_print, "%u\n", tokenizer_data.add_space_prefix);
                         break;
                     default:
                         // consume but ignore other known params for now
@@ -461,6 +491,14 @@ bool llm_model::load_all_tensors(std::map<std::string, llm_weight_item> & weight
                     case LLM_OUTPUT_PROJ:
                         output = weight_tensor;
                         break;
+                    case LLM_ROPE_LONG:
+                        rope_long = weight_tensor;
+                        for (int i = 0; i < layers.size(); ++i) layers[i].rope_long = rope_long;
+                        break;
+                    case LLM_ROPE_SHORT:
+                        rope_short = weight_tensor;
+                        for (int i = 0; i < layers.size(); ++i) layers[i].rope_short = rope_short;
+                        break;
                     default:
                         LLM_ERROR("unhandled weight item %d for tensor %s\n", item, tensor_meta[i].name.c_str());
                         break;
@@ -502,4 +540,14 @@ void llm_model::esti_kvcache(uint32_t ctx_len) {
 
 size_t llm_model::get_n_tensors() const {
     return n_tensors;
+}
+
+nnml_tensor * llm_model::get_rope_factors(int32_t il) const {
+    // choose long/short freq factors
+    if (layers[il].rope_freqs != nullptr) {
+        return layers[il].rope_freqs;
+    }
+
+    // just only use rope-short in the current version
+    return layers[il].rope_short;
 }

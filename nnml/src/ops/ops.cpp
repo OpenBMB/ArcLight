@@ -124,6 +124,8 @@ static void nnml_compute_forward_get_rows_f32(nnml_tensor * node, const nnml_com
 
         NNML_ASSERT(i01 >= 0 && i01 < ne01);
 
+        // src0->save_data("/home/modelbest/llama.cpp/attn_out_bk.bin");
+        // printf("%lld %d %d %d %d %d %d %d %d %d %d\n", nc, i10, i01, i11, i12, nb1, nb2, nb3, nb01, nb02, nb03);
         nnml_vec_cpy_f32(nc,
                 (float *) ((char *) node->tensor_data() + i10*nb1  + i11*nb2  + i12*nb3),
                 (float *) ((char *) src0->tensor_data() + i01*nb01 + i11*nb02 + i12*nb03));

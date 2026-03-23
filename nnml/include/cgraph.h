@@ -139,6 +139,7 @@ struct llm_lora_weight {
  *  - It will not provides setter functions for all hyperparameters.
  *  - Because they are set only once at the beginning of graph building, and
  *  - we assume that the users of llm_hparams know that they are read-only after initialization.
+ *  - They are initialized in model.cpp - load_gguf_kv.
  */
 struct llm_hparams {
     uint32_t get_n_embd()                   const noexcept { return n_embd; }
@@ -529,6 +530,7 @@ public:
     llm_ubatch &        get_ubatch() noexcept { return ubatch; }
     nnml_cgraph_cnode * get_nodes_ptr() const noexcept { return nodes; }
     nnml_cgraph_cnode * get_nth_cnode(int32_t idx) const noexcept { NNML_ASSERT(idx >= 0 && idx < n_nodes); return &nodes[idx]; }
+    nnml_tensor *       get_t_out_ids() const noexcept {return t_out_ids;}
     void                set_t_logits(nnml_tensor * t) noexcept { t_logits = t; }
     void                set_t_embd(nnml_tensor * t) noexcept { t_embd = t; }
     void                set_n_tokens(int64_t n) noexcept { n_tokens = n; }
