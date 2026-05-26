@@ -96,7 +96,17 @@ std::string qwen3_apply_template(
     return out;
 }
 REGISTER_TEMPLATE_CALLER(qwen3, qwen3_apply_template);
-
+// Register qwen35moe as alias for qwen3 (MOE version uses same architecture)
+REGISTER_HPARAMS_MAP(qwen35moe, qwen3_hparams_map);
+REGISTER_WEIGHTS_MAP(qwen35moe, qwen3_weights_map);
+REGISTER_ROPE_TYPE(qwen35moe, llm_rope_type::LLM_ROPE_TYPE_NEOX);
+REGISTER_FREQ_BASE(qwen35moe, 1000000.0f);
+REGISTER_FREQ_SCALE(qwen35moe, 1.0f);
+REGISTER_EXT_FACTOR(qwen35moe, 0.0f);
+REGISTER_ATTN_FACTOR(qwen35moe, 1.0f);
+REGISTER_BETA_FAST(qwen35moe, 32.0f);
+REGISTER_BETA_SLOW(qwen35moe, 1.0f);
+REGISTER_TEMPLATE_CALLER(qwen35moe, qwen3_apply_template);
 // legacy computation graph builder for qwen3: only use nnml_tensor *
 void build_qwen3_forward(nnml_cgraph & graph, llm_model & model, bool is_tp) {
     llm_hparams & hparams = graph.get_hparams();
@@ -276,3 +286,4 @@ void build_qwen3_forward_tp(nnml_cgraph & graph, llm_model & model, bool is_tp) 
 
 // static bool _reg_qwen3_builder = (nnml_cgraph::reg_builder("qwen3", build_qwen3_forward), true);
 static bool _reg_qwen3_builder = (nnml_cgraph::reg_builder("qwen3", build_qwen3_forward_tp), true);
+static bool _reg_qwen35moe_builder = (nnml_cgraph::reg_builder("qwen35moe", build_qwen3_forward_tp), true);
