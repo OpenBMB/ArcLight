@@ -15,6 +15,7 @@
 
 #if !defined(_WIN32)
 #include <sched.h>
+#include <unistd.h>
 #endif
 
 
@@ -574,7 +575,16 @@ static inline int nnml_cpu_has_matmul_int8(void) {
 
 static inline int nnml_cpu_get_sve_cnt(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
-    return nnml_arm_arch_features.sve_cnt;
+    return __builtin_sve_vector_length();
+#  if defined(_GNU_SOURCE) && defined(_SC_SVE_VQ_MAX)
+    return sysconf(_SC_SVE_VQ_MAX);
+#  elif defined(__aarch64__)
+    uint64_t zcr;
+    asm("mrs %0, ZCR_EL1" : "=r"(zcr));
+    return (zcr & 0xf) + 1;
+#  else
+    return 4;
+#  endif
 #else
     return 0;
 #endif
