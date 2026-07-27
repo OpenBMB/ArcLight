@@ -1239,6 +1239,7 @@ void nnml_compute_forward_add(nnml_tensor * node, const nnml_compute_state * par
             } break;
         case NNML_TYPE_Q4_0:
         case NNML_TYPE_Q8_0:
+        case NNML_TYPE_Q4_K:
         case NNML_TYPE_Q6_K:
             {
                 nnml_compute_forward_add_q_f32(node, params);
@@ -1282,6 +1283,7 @@ void nnml_compute_forward_get_rows(nnml_tensor * node, const nnml_compute_state 
     const nnml_tensor * src0 = node->get_src_tensor(0);
     switch (src0->get_data_type()) {
         case NNML_TYPE_Q4_0:
+        case NNML_TYPE_Q4_K:
         case NNML_TYPE_Q6_K:
             {
                 nnml_compute_forward_get_rows_q(node, params);

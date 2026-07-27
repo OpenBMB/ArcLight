@@ -221,7 +221,12 @@ void llm_model::load_gguf_kv(bool is_print) {
                         // load_arch(s);
                         break;
                     case LLM_NAME:
-                        // name = std::string(s);
+                        // MiniCPM5 GGUF files use the standard "llama" architecture
+                        // key while requiring the MiniCPM5 prompt and model
+                        // implementation registered in this project.
+                        if (std::string(s).rfind("MiniCPM5", 0) == 0) {
+                            name = "minicpm5";
+                        }
                         break;
                     case LLM_TOKENIZER_CHAT_TMPL:
                         chat_template = std::string(s);

@@ -151,7 +151,7 @@ enum nnml_type {
     NNML_TYPE_PH_9    = 9,
     NNML_TYPE_PH_10   = 10,
     NNML_TYPE_PH_11   = 11,
-    NNML_TYPE_PH_12   = 12,
+    NNML_TYPE_Q4_K    = 12,
     NNML_TYPE_PH_13   = 13,
     NNML_TYPE_Q6_K    = 14,
     NNML_TYPE_Q8_K    = 15,
@@ -344,6 +344,9 @@ void nnml_vec_dot_q4_0_q8_0(int n, float * NNML_RESTRICT s, size_t bs, const voi
 void dequantize_row_q6_K(const block_q6_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
 void quantize_row_q6_K_ref(const float * NNML_RESTRICT x, block_q6_K * NNML_RESTRICT y, int64_t k);
 void nnml_vec_dot_q6_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
+
+void dequantize_row_q4_K(const block_q4_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
+void nnml_vec_dot_q4_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void dequantize_row_q8_0(const block_q8_0 * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0_ref(const float * NNML_RESTRICT x, block_q8_0 * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0(const float * NNML_RESTRICT x, void * NNML_RESTRICT vy, int64_t k);

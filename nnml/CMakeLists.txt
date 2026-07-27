@@ -106,3 +106,6 @@ target_link_libraries(test-cgraph PRIVATE nnml)
 
 add_executable(test-gemm ${CMAKE_CURRENT_SOURCE_DIR}/test/test-gemm.cpp)
 target_link_libraries(test-gemm PRIVATE nnml)
+
+add_executable(test-q4-k ${CMAKE_CURRENT_SOURCE_DIR}/test/test-q4-k.cpp)
+target_link_libraries(test-q4-k PRIVATE nnml)
