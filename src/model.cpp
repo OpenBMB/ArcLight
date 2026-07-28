@@ -13,6 +13,7 @@
 
 #include "cgraph.h"
 #include "ops.h"
+#include "../nnml/src/ops/arm/tq2_i2s.h"
 #include "gguf.h"
 #include "model.h"
 #include "tokenizer.h"
@@ -291,6 +292,18 @@ void llm_model::load_gguf_kv(bool is_print) {
                         hparams.n_embd_head_v = r_u32(f);
                         LLM_LOG(is_print, "%u\n", hparams.n_embd_head_v);
                         break;
+                    case LLM_EMBEDDING_SCALE:
+                        hparams.f_embedding_scale = r_f32(f);
+                        LLM_LOG(is_print, "%g\n", hparams.f_embedding_scale);
+                        break;
+                    case LLM_RESIDUAL_SCALE:
+                        hparams.f_residual_scale = r_f32(f);
+                        LLM_LOG(is_print, "%g\n", hparams.f_residual_scale);
+                        break;
+                    case LLM_LOGIT_SCALE:
+                        hparams.f_logit_scale = r_f32(f);
+                        LLM_LOG(is_print, "%g\n", hparams.f_logit_scale);
+                        break;
                     case LLM_TOKENIZER_EOS_ID:
                         tokenizer_data.eos_id = r_u32(f);
                         LLM_LOG(is_print, "%u\n", tokenizer_data.eos_id);
@@ -383,6 +396,24 @@ void llm_model::set_asm_gemm(nnml_tensor ** tensors) {
         if (repack_ret != 0) {
             LLM_ERROR("tensor '%s' repack failed", weight_tensor->get_name_ptr());
         }
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+        // TQ2_0: build the per-weight I2S reorder cache so the asm dispatch can
+        // route mul_mat through the NEON I2S kernel. format_repack is a no-op for
+        // TQ2_0, so the weight data is still in block_tq2_0 layout as expected by
+        // tq2_i2s_build_cache. The cache is malloc'd and lives for the model's
+        // lifetime; the asm_gemm flag (set above) is what selects this path.
+        if (weight_tensor->get_data_type() == NNML_TYPE_TQ2_0) {
+            const int64_t in_dim  = weight_tensor->get_elements(0);   // contraction (ne00)
+            const int64_t out_dim = weight_tensor->get_elements(1);   // output rows (ne01)
+            NNML_ASSERT(in_dim > 0 && in_dim % QK_K == 0);
+            tq2_i2s_cache * c = tq2_i2s_build_cache(weight_tensor->tensor_data(), (int)out_dim, (int)in_dim);
+            if (c != nullptr) {
+                weight_tensor->set_i2s_cache(c);
+            } else {
+                LLM_ERROR("tensor '%s' I2S cache build failed", weight_tensor->get_name_ptr());
+            }
+        }
+#endif
     }
 }
 
@@ -406,6 +437,12 @@ bool llm_model::load_all_tensors(std::map<std::string, llm_weight_item> & weight
 
         void * const obj_new = malloc(NNML_TENSOR_SIZE + tensor_meta[i].nbytes);
         nnml_tensor * weight_tensor = (nnml_tensor *)obj_new;
+        // Weight tensors bypass nnml_tensor::new_impl (header+data are co-allocated),
+        // so explicitly zero the header — new_impl zeroes extra[]/padding[]/flags/
+        // src[]/op_params, and weight load relies on the same defaults (in particular
+        // extra[0]==0 / padding==nullptr when --asm 0 leaves a weight unflagged, and
+        // padding==nullptr so a stray get_i2s_cache() cannot dereference garbage).
+        memset(weight_tensor, 0, NNML_TENSOR_SIZE);
         weight_tensor->set_data_type((nnml_type)tensor_meta[i].ttype);
         weight_tensor->set_tensor_type(NNML_TENSOR_TYPE_WEIGHT);
         weight_tensor->set_operation(NNML_OP_NONE);

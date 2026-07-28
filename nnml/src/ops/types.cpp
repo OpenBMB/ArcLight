@@ -74,6 +74,15 @@ const nnml_type_traits type_traits[NNML_TYPE_COUNT] = {
     make_type_traits("i32", 1, -1, sizeof(int32_t)),
     make_type_traits("i64", 1, -1, sizeof(int64_t)),
     make_type_traits("f64", 1, -1, sizeof(double)),
+    place_holder,  // 29
+    place_holder,  // 30
+    place_holder,  // 31
+    place_holder,  // 32
+    place_holder,  // 33
+    place_holder,  // 34
+    make_type_traits("tq2_0", QK_K, -1, sizeof(block_tq2_0), true,
+        (nnml_to_float_t) dequantize_row_tq2_0, nullptr, nullptr,
+        nnml_vec_dot_tq2_0_q8_K, NNML_TYPE_Q8_K, 1),
 };
 
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave) {
@@ -425,7 +434,7 @@ void dequantize_row_q4_K(const block_q4_K * NNML_RESTRICT x, float * NNML_RESTRI
     }
 }
 
-void nnml_vec_dot_q4_K_q8_K(
+void nnml_vec_dot_q4_K_q8_K_ref(
     int n,
     float * NNML_RESTRICT s,
     size_t bs,
@@ -448,6 +457,52 @@ void nnml_vec_dot_q4_K_q8_K(
 
     for (int ib = 0; ib < nb; ++ib) {
         dequantize_row_q4_K(x + ib, values, QK_K);
+        const float yd = y[ib].d;
+        for (int j = 0; j < QK_K; ++j) {
+            sum += values[j] * yd * y[ib].qs[j];
+        }
+    }
+    *s = sum;
+}
+
+// TQ2_0 — ternary {-1,0,+1}, 256 weights per super-block (QK_K), 64 packed bytes + one fp16 scale.
+// Interleaved layout matching llama.cpp dequantize_row_tq2_0: each byte holds four 2-bit codes at
+// bit-positions {0,2,4,6}; the loop emits (j-group, l-plane, m-element) order, 2*4*32 = 256 outputs.
+void dequantize_row_tq2_0(const block_tq2_0 * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+    for (int64_t i = 0; i < nb; i++) {
+        const float d = NNML_FP16_TO_FP32(x[i].d);
+        const uint8_t * qs = x[i].qs;
+        for (int j = 0; j < QK_K / 4; j += 32) {   // 2 groups of 32 bytes (QK_K/4 == 64)
+            for (int l = 0; l < 4; ++l) {          // 4 two-bit code planes per byte
+                for (int m = 0; m < 32; ++m) {
+                    const int8_t q = (qs[j + m] >> (l * 2)) & 3;  // code in {0,1,2,3}
+                    *y++ = (float)(q - 1) * d;                     // {0,1,2} -> {-1,0,+1}; code 3 reserved
+                }
+            }
+        }
+    }
+}
+
+void nnml_vec_dot_tq2_0_q8_K(
+        int n, float * NNML_RESTRICT s, size_t bs,
+        const void * NNML_RESTRICT vx, size_t bx,
+        const void * NNML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    NNML_UNUSED(bs);
+    NNML_UNUSED(bx);
+    NNML_UNUSED(by);
+
+    const block_tq2_0 * NNML_RESTRICT x = (const block_tq2_0 *) vx;
+    const block_q8_K  * NNML_RESTRICT y = (const block_q8_K  *) vy;
+    const int nb = n / QK_K;
+    float values[QK_K];
+    float sum = 0.0f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        dequantize_row_tq2_0(x + ib, values, QK_K);
         const float yd = y[ib].d;
         for (int j = 0; j < QK_K; ++j) {
             sum += values[j] * yd * y[ib].qs[j];

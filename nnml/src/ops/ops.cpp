@@ -5,6 +5,7 @@
 
 #include "ops.h"
 #include "tensor.h"
+#include "arm/tq2_i2s.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1228,6 +1229,50 @@ void nnml_compute_forward_dup(nnml_tensor * node, const nnml_compute_state * par
     }
 }
 
+static void nnml_compute_forward_scale_f32(nnml_tensor * node, const nnml_compute_state * params) {
+    const nnml_tensor * src0 = node->get_src_tensor(0);
+    NNML_ASSERT(are_same_shape(src0, node));
+    NNML_ASSERT(src0->get_stride_bytes(0) == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    NNML_TENSOR_UNARY_OP_LOCALS
+
+    float s; float b;
+    {
+        const float * op = (const float *) node->get_operation_params();
+        s = op[0];
+        b = op[1];
+    }
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (const float *) ((char *) src0->tensor_data() + i01*nb01 + i02*nb02 + i03*nb03);
+                float * y = (float *) ((char *) node->tensor_data() + i01*nb1 + i02*nb2 + i03*nb3);
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    y[i00] = x[i00]*s + b;
+                }
+            }
+        }
+    }
+}
+
+void nnml_compute_forward_scale(nnml_tensor * node, const nnml_compute_state * params) {
+    const nnml_tensor * src0 = node->get_src_tensor(0);
+    switch (src0->get_data_type()) {
+        case NNML_TYPE_F32:
+            {
+                nnml_compute_forward_scale_f32(node, params);
+            } break;
+        default:
+            {
+                NNML_ABORT("compute_forward_scale: unsupported src0 type %d", (int) src0->get_data_type());
+            }
+    }
+}
+
 void nnml_compute_forward_add(nnml_tensor * node, const nnml_compute_state * params) {
     const nnml_tensor * src0 = node->get_src_tensor(0);
     switch (src0->get_data_type()) {
@@ -1255,24 +1300,101 @@ void nnml_compute_forward_mul(nnml_tensor * node, const nnml_compute_state * par
     nnml_binary_compute_forward_mul(node, params);
 }
 
+void nnml_compute_forward_mul_mat_tq2_0_i2s(nnml_tensor * node, const nnml_compute_state * params) {
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    const nnml_tensor * src0 = node->get_src_tensor(0);  // weight (TQ2_0)
+    const nnml_tensor * src1 = node->get_src_tensor(1);  // activation (F32)
+
+    NNML_TENSOR_BINARY_OP_LOCALS   // ne0..ne3, nb0..nb3, ne00.., nb00.. (src0/src1/node)
+
+    const tq2_i2s_cache * c = (const tq2_i2s_cache *) src0->get_i2s_cache();
+    NNML_ASSERT(c != nullptr);
+
+    // mul_mat convention: src0 = weight [ne00=in_dim (contraction), ne01=out_dim];
+    // node = output [ne0=out_dim, ne1=n_tokens]. Asserted by forward_mul_mat_generic
+    // (ne0 == ne01, ne1 == ne11), so out_dim/ne1 come from the node here.
+    const int out_dim  = (int) ne0;
+    const int in_dim   = (int) ne00;
+    NNML_ASSERT(in_dim > 0 && in_dim % QK_K == 0);
+    NNML_ASSERT(nb0 == sizeof(float));   // F32 output, row-major
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    // Partition output rows across threads in 4-row groups (the I2S kernel
+    // processes one 4-row group at a time). Group-aligned splits avoid the
+    // boundary-row discard the kernel would otherwise perform.
+    const int n_groups = (out_dim + 3) / 4;
+    const int groups_per_thread = (n_groups + nth - 1) / nth;
+    const int g0 = groups_per_thread * ith;
+    const int g1 = (g0 + groups_per_thread < n_groups) ? (g0 + groups_per_thread) : n_groups;
+
+    const int row_begin = g0 * 4;
+    const int row_end   = g1 * 4;
+    if (row_begin >= out_dim || row_begin >= row_end) {
+        return;   // nothing for this thread
+    }
+    const int row_count = (row_end < out_dim ? row_end : out_dim) - row_begin;
+
+    // Per-thread int8 activation scratch: qvec (in_dim int8) + bsums (in_dim/QK_K
+    // int32) + 1 float for the scale. Each thread owns its own slice of the
+    // shared work buffer so redundant activation quantization across threads is safe.
+    const int n_blocks_qk_k = in_dim / QK_K;
+    const size_t scratch_bytes = (size_t)in_dim + (size_t)n_blocks_qk_k * sizeof(int32_t) + sizeof(float);
+    const size_t scratch_stride = (scratch_bytes + 63u) & ~63u;   // 64-byte align per thread
+    int8_t  * qvec   = (int8_t  *)(params->work_data + (size_t)ith * scratch_stride);
+    int32_t * bsums  = (int32_t *)(qvec + in_dim);
+    float   * vscale = (float   *)(bsums + n_blocks_qk_k);
+
+    // src1: [in_dim, n_tokens]; node: [out_dim, n_tokens]. For each input token,
+    // quantize that token's activation row, then compute this thread's output-row
+    // slice and write it into the node directly (kernel writes row_count floats).
+    for (int64_t i1 = 0; i1 < ne1; ++i1) {
+        const float * act_row = (const float *)((const char *)src1->tensor_data() + i1 * nb11);
+        tq2_quantize_vec_i8(act_row, in_dim, qvec, vscale, bsums);
+
+        float * out_slice = (float *)((char *)node->tensor_data() + i1 * nb1) + row_begin;
+        tq2_matmul_i2s_neon(c, qvec, *vscale, bsums, row_begin, row_count, out_slice);
+    }
+#else
+    NNML_UNUSED(node);
+    NNML_UNUSED(params);
+    NNML_ABORT("TQ2_0 I2S path reached on a non-ARM/non-dotprod build");
+#endif
+}
+
 void nnml_compute_forward_mul_mat(nnml_tensor * node, const nnml_compute_state * params) {
     const nnml_tensor * src0 = node->get_src_tensor(0);
-    if (node->is_asm_gemm() && src0->get_data_type() == NNML_TYPE_Q4_0) {
-        // printf("gemm q4_0 x q8_0 using asm\n");
-        if (nnml_cpu_has_avx2() || (nnml_cpu_has_sve() && nnml_cpu_has_matmul_int8() && nnml_cpu_get_sve_cnt() == QK8_0)) {
-            if (src0->get_elements(1) % 8 == 0) {
-                forward_mul_mat<block_q4_0, 8, 8, NNML_TYPE_Q8_0>(node, params);
-            }
+    if (node->is_asm_gemm()) {
+        const nnml_type src0_type = src0->get_data_type();
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+        if (src0_type == NNML_TYPE_TQ2_0) {
+            nnml_compute_forward_mul_mat_tq2_0_i2s(node, params);
+            return;
         }
-        if (nnml_cpu_has_neon() && nnml_cpu_has_matmul_int8()) {
-            if (src0->get_elements(1) % 4 == 0) {
-                forward_mul_mat<block_q4_0, 8, 4, NNML_TYPE_Q8_0>(node, params);
+#endif
+        if (src0_type == NNML_TYPE_Q4_0) {
+            // printf("gemm q4_0 x q8_0 using asm\n");
+            if (nnml_cpu_has_avx2() || (nnml_cpu_has_sve() && nnml_cpu_has_matmul_int8() && nnml_cpu_get_sve_cnt() == QK8_0)) {
+                if (src0->get_elements(1) % 8 == 0) {
+                    forward_mul_mat<block_q4_0, 8, 8, NNML_TYPE_Q8_0>(node, params);
+                }
             }
-        }
-        if (nnml_cpu_has_neon() && nnml_cpu_has_dotprod()) {
-            if (src0->get_elements(1) % 4 == 0) {
-                forward_mul_mat<block_q4_0, 4, 4, NNML_TYPE_Q8_0>(node, params);
+            if (nnml_cpu_has_neon() && nnml_cpu_has_matmul_int8()) {
+                if (src0->get_elements(1) % 4 == 0) {
+                    forward_mul_mat<block_q4_0, 8, 4, NNML_TYPE_Q8_0>(node, params);
+                }
             }
+            if (nnml_cpu_has_neon() && nnml_cpu_has_dotprod()) {
+                if (src0->get_elements(1) % 4 == 0) {
+                    forward_mul_mat<block_q4_0, 4, 4, NNML_TYPE_Q8_0>(node, params);
+                }
+            }
+        } else {
+            // asm_gemm set but unsupported weight type (e.g. TQ2_0 on non-dotprod,
+            // or any other quant without an asm kernel): fall back to the scalar
+            // generic path so the model still runs.
+            forward_mul_mat_generic(node, params);
         }
     } else {
         forward_mul_mat_generic(node, params);

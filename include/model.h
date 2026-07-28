@@ -56,7 +56,10 @@ enum llm_hparams_item {
     LLM_TOKENIZER_ADD_SPA,
     LLM_TOKENIZER_CHAT_TMPL,
     LLM_VOCAB_TYPE,
-    LLM_QUANT_VERSION
+    LLM_QUANT_VERSION,
+    LLM_EMBEDDING_SCALE,
+    LLM_RESIDUAL_SCALE,
+    LLM_LOGIT_SCALE,
 };
 
 /** type of every weight item, for building map elsewhere */

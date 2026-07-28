@@ -1204,6 +1204,89 @@ void nnml_vec_dot_q6_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+// Mirror of get_scale_min_k4 from types.cpp (file-static there, so not visible here).
+// Extracts the j-th 6-bit (scale, min) pair from the packed Q4_K scales[] array.
+static inline void nnml_q4k_get_scale_min_k4(int j, const uint8_t * NNML_RESTRICT q, uint8_t * NNML_RESTRICT d, uint8_t * NNML_RESTRICT m) {
+    if (j < 4) {
+        *d = q[j] & 0x3f;
+        *m = q[j + 4] & 0x3f;
+    } else {
+        *d = (q[j + 4] & 0x0f) | ((q[j - 4] >> 6) << 4);
+        *m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
+    }
+}
+
+// Scalar fallback for ARM without DOTPROD: defer to the portable reference.
+void nnml_vec_dot_q4_K_q8_K_generic(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc) {
+    nnml_vec_dot_q4_K_q8_K_ref(n, s, bs, vx, bx, vy, by, nrc);
+}
+
+void nnml_vec_dot_q4_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    NNML_UNUSED(nrc);
+    NNML_UNUSED(bx);
+    NNML_UNUSED(by);
+    NNML_UNUSED(bs);
+
+    const block_q4_K * NNML_RESTRICT x = (const block_q4_K *) vx;
+    const block_q8_K * NNML_RESTRICT y = (const block_q8_K *) vy;
+    const int nb = n / QK_K;
+
+#if defined(__ARM_FEATURE_DOTPROD)
+    const uint8x16_t m4b = vdupq_n_u8(0xF);
+    const int32x4_t  vzero = vdupq_n_s32(0);
+
+    float sum = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const float d    = NNML_CPU_FP16_TO_FP32(x[i].d);
+        const float dmin = NNML_CPU_FP16_TO_FP32(x[i].dmin);
+        const uint8_t * qs = x[i].qs;
+        const int8_t  * q8 = y[i].qs;
+        const int16_t * bsums = y[i].bsums;
+        const float    yd  = y[i].d;
+
+        // 8 sub-block (scale, min) pairs, each covering 32 weights.
+        uint8_t sc[8]; uint8_t m[8];
+        for (int j = 0; j < 8; ++j) nnml_q4k_get_scale_min_k4(j, x[i].scales, &sc[j], &m[j]);
+
+        int32_t isum = 0;       // sum_j sc[j] * (nibble . q8) over the 32-weight sub-block
+        int32_t isum_mins = 0;  // sum_j m[j]  * (sum q8)        over the 32-weight sub-block
+
+        // Q4_K packs 2 sub-blocks per 32-byte qs run: lo nibbles -> sub-block 2p,
+        // hi nibbles -> sub-block 2p+1. Sub-block j multiplies q8[j*32 .. j*32+31].
+        for (int p = 0; p < QK_K / 64; ++p) {
+            const nnml_uint8x16x2_t q4bits  = nnml_vld1q_u8_x2(qs + p * 32);
+            const nnml_int8x16x4_t  q8bytes = nnml_vld1q_s8_x4(q8 + p * 64);
+
+            const int8x16_t lo0 = vreinterpretq_s8_u8(vandq_u8(q4bits.val[0], m4b));
+            const int8x16_t lo1 = vreinterpretq_s8_u8(vandq_u8(q4bits.val[1], m4b));
+            const int8x16_t hi0 = vreinterpretq_s8_u8(vshrq_n_u8(q4bits.val[0], 4));
+            const int8x16_t hi1 = vreinterpretq_s8_u8(vshrq_n_u8(q4bits.val[1], 4));
+
+            // lo nibbles . q8[val[0],val[1]] for sub-block 2p; hi nibbles . q8[val[2],val[3]] for 2p+1.
+            const int32x4_t acc_lo = nnml_vdotq_s32(nnml_vdotq_s32(vzero, lo0, q8bytes.val[0]), lo1, q8bytes.val[1]);
+            const int32x4_t acc_hi = nnml_vdotq_s32(nnml_vdotq_s32(vzero, hi0, q8bytes.val[2]), hi1, q8bytes.val[3]);
+
+            const int j_lo = 2 * p;
+            const int j_hi = 2 * p + 1;
+            // bsums[k] = sum of q8[k*16..(k+1)*16-1]; a 32-element sub-block spans two bsums.
+            const int32_t sumy_lo = (int32_t)bsums[2 * j_lo]     + (int32_t)bsums[2 * j_lo + 1];
+            const int32_t sumy_hi = (int32_t)bsums[2 * j_hi]     + (int32_t)bsums[2 * j_hi + 1];
+
+            isum      += (int32_t)sc[j_lo] * vaddvq_s32(acc_lo) + (int32_t)sc[j_hi] * vaddvq_s32(acc_hi);
+            isum_mins += (int32_t)m [j_lo] * sumy_lo            + (int32_t)m [j_hi] * sumy_hi;
+        }
+
+        // weight = d*sc*nibble - dmin*m ; contrib = yd * (d * isum - dmin * isum_mins)
+        sum += yd * (d * (float)isum - dmin * (float)isum_mins);
+    }
+    *s = sum;
+#else
+    nnml_vec_dot_q4_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void nnml_vec_dot_q8_0_q8_0(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;

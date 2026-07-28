@@ -31,6 +31,10 @@ void nnml_compute_node(nnml_tensor * node, const nnml_compute_state * params) {
             {
                 nnml_compute_forward_mul(node, params);
             } break;
+        case NNML_OP_SCALE:
+            {
+                nnml_compute_forward_scale(node, params);
+            } break;
         case NNML_OP_MUL_MAT:
             {
                 nnml_compute_forward_mul_mat(node, params);

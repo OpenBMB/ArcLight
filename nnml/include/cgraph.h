@@ -218,6 +218,7 @@ struct llm_hparams {
     float    f_residual_scale       = 0.0;
     float    f_embedding_scale      = 0.0;
     float    f_attention_scale      = 0.0;
+    float    f_logit_scale          = 1.0;
     float    f_norm_eps             = 1e-5;
     float    f_norm_rms_eps         = 1e-6;
     float    f_norm_group_eps       = 1e-5;

@@ -54,8 +54,12 @@ nnml_tensor * nnml_cgraph::build_inp_embd(nnml_tensor * tok_embd) {
         t_embd = tensor_new_2d(mem, NNML_TENSOR_TYPE_WEIGHT, 0, 0, NNML_TYPE_F32, n_embd, ubatch.n_tokens);
         cur = t_embd;
     }
-    // For Granite architecture
+    // For Granite / MiniCPM (embedding_scale != 0)
     if (hparams.f_embedding_scale != 0.0f) {
+        // The graph is a linear node list (build_forward_impl does not recurse into
+        // sources), so the embedding lookup must be enqueued before it is wrapped in
+        // the scale node — otherwise get_rows is never computed and the scale reads zeros.
+        build_forward_expand(cur);
         cur = nnml_scale(mem, NNML_TENSOR_TYPE_ACTIVATION, 0, 0, cur, hparams.f_embedding_scale);
     }
 

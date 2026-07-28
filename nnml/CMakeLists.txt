@@ -109,3 +109,6 @@ target_link_libraries(test-gemm PRIVATE nnml)
 
 add_executable(test-q4-k ${CMAKE_CURRENT_SOURCE_DIR}/test/test-q4-k.cpp)
 target_link_libraries(test-q4-k PRIVATE nnml)
+
+add_executable(test-tq2-0 ${CMAKE_CURRENT_SOURCE_DIR}/test/test-tq2-0.cpp)
+target_link_libraries(test-tq2-0 PRIVATE nnml)

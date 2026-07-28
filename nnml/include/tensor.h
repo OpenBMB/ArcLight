@@ -16,6 +16,7 @@
 #include <vector>
 #include <cstdarg>
 #include <array>
+#include <cstring>
 
 #include "nnml.h"
 #include "ops.h"
@@ -152,6 +153,11 @@ public:
     nnml_glu_op         get_glu_op()                    const;
     void                set_asm_gemm()                  noexcept       { extra[0] = 1; }
     bool                is_asm_gemm()                   const noexcept { return extra[0] != 0; }
+    // Per-weight I2S reorder cache (TQ2_0 asm path). The pointer is stored in
+    // the 8-byte `padding` field via memcpy to avoid alignment UB; the struct
+    // size is unchanged (padding is consumed byte-for-byte).
+    void *              get_i2s_cache()                 const noexcept { void * p; memcpy(&p, padding, sizeof(p)); return p; }
+    void                set_i2s_cache(void * p)         noexcept       { memcpy(padding, &p, sizeof(p)); }
     void                print_data(uint32_t max_elements = 12, bool all = true, int32_t start_idx = 0) const;
     void                save_data(const char * filename) const;
     void                load_data(const char * filename);

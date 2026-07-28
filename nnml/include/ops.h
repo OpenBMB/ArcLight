@@ -168,7 +168,9 @@ enum nnml_type {
     NNML_TYPE_I32     = 26,
     NNML_TYPE_I64     = 27,
     NNML_TYPE_F64     = 28,
-    NNML_TYPE_COUNT   = 29,
+    // 29-34 reserved (unused GGUF type-id slots)
+    NNML_TYPE_TQ2_0   = 35,
+    NNML_TYPE_COUNT   = 36,
 };
 
 
@@ -346,12 +348,15 @@ void quantize_row_q6_K_ref(const float * NNML_RESTRICT x, block_q6_K * NNML_REST
 void nnml_vec_dot_q6_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 
 void dequantize_row_q4_K(const block_q4_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
+void nnml_vec_dot_q4_K_q8_K_ref(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void nnml_vec_dot_q4_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void dequantize_row_q8_0(const block_q8_0 * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0_ref(const float * NNML_RESTRICT x, block_q8_0 * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0(const float * NNML_RESTRICT x, void * NNML_RESTRICT vy, int64_t k);
 void nnml_vec_dot_q8_0_q8_0(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void quantize_row_q8_K(const float * NNML_RESTRICT x, void * NNML_RESTRICT y, int64_t k);
+void dequantize_row_tq2_0(const block_tq2_0 * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
+void nnml_vec_dot_tq2_0_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 
 void nnml_fp16_to_fp32(const nnml_fp16_t * x, float * y, int64_t n);
 void nnml_cpu_fp16_to_fp32(const nnml_fp16_t * x, float * y, int64_t n);
@@ -421,7 +426,13 @@ std::pair<int64_t, int64_t> get_thread_range(nnml_tensor * node, const nnml_comp
 void nnml_compute_forward_dup(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_add(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_mul(nnml_tensor * node, const nnml_compute_state * params);
+void nnml_compute_forward_scale(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_mul_mat(nnml_tensor * node, const nnml_compute_state * params);
+
+// TQ2_0 I2_S NEON matmul (ARM dotprod only). Dispatched from
+// nnml_compute_forward_mul_mat when the weight has the asm_gemm flag and an
+// attached I2S cache (built at load time, see llm_model::set_asm_gemm).
+void nnml_compute_forward_mul_mat_tq2_0_i2s(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_get_rows(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_set_rows(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_cpy(nnml_tensor * node, const nnml_compute_state * params);

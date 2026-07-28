@@ -964,6 +964,11 @@ void nnml_vec_dot_q6_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+// x86 SIMD Q4_K vec_dot is out of scope; defer to the portable scalar reference.
+void nnml_vec_dot_q4_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc) {
+    nnml_vec_dot_q4_K_q8_K_ref(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 void nnml_vec_dot_q8_0_q8_0(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
