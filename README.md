@@ -25,7 +25,7 @@ ArcLight currently provides CPU backends for both ARM and x86 platforms, togethe
 
 We sincerely invite developers from around the world to participate in the project and help build a high-performance unified-memory LLM inference framework together.
 
-Before running ArcLight, you need to [download](https://huggingface.co) a model. ArcLight uses the GGUF model format from the [llama.cpp](https://github.com/ggml-org/llama.cpp) project. Instructions for converting models to GGUF can be found in the llama.cpp documentation. The current codebase includes model definitions for Qwen3, Llama, and MiniCPM5. We recommend starting with Qwen3-4B or another small GGUF model for initial testing. Contributions for additional model families are welcome.
+Before running ArcLight, you need to [download](https://huggingface.co) a model. ArcLight uses the GGUF model format from the [llama.cpp](https://github.com/ggml-org/llama.cpp) project. Instructions for converting models to GGUF can be found in the llama.cpp documentation. The current codebase includes model definitions for Qwen3, Llama, MiniCPM5, and BitCPM/MiniCPM4 (1.58-bit ternary, `TQ2_0`; the `bitcpm4-*` models). We recommend starting with Qwen3-4B or another small GGUF model for initial testing. Contributions for additional model families are welcome.
 
 Example command:
 
@@ -94,6 +94,27 @@ We currently support two inference modes: single-node mode and multi-node mode. 
 We also plan to support pipeline parallelism in the future. The `--numa pp` mode will be enabled once that implementation is ready.
 
 The current v1.0 release requires manually setting the sizes of several buffers, including the weight buffer, activation buffer, KV cache, and thread-group workspace. These values are specified in GB. For example: `--w_gb 4 --a_gb 8 --kv_gb 2 --work_gb 2`. We will integrate automatic buffer sizing in a future release.
+
+## 📊 Performance
+
+On ARM, every quantized matmul path is now NEON-accelerated (`TQ2_0`/`Q4_0`/`Q4_K`/`Q6_K`/`Q8_0`/`F16`): the ternary `TQ2_0` path uses a load-time I2S reorder + `vdotq_s32` kernel (ported from the [158BitNet](https://github.com/OpenBMB/158BitNet) runtime), and `Q4_K` uses a NEON dotprod `vec_dot`. The decode (token-generation) throughput below is measured single-node on Apple Silicon (M4, 4 P-cores + 6 E-cores, `--threads 8 --nodes 1 --numa none`).
+
+**1.58-bit ternary models** (`bitcpm4-*`, `TQ2_0` projections, I2S NEON kernel):
+
+| Model | decode (tok/s) |
+| --- | ---: |
+| `bitcpm4-0.5b-tq2_0.gguf` | ~188 |
+| `bitcpm4-1b-tq2_0.gguf`   | ~112 |
+| `bitcpm4-3b-tq2_0.gguf`   | ~53  |
+| `bitcpm4-8b-tq2_0.gguf`   | ~21  |
+
+**Standard-quant model** (`Q4_K` projections, NEON `vec_dot`):
+
+| Model | decode (tok/s) |
+| --- | ---: |
+| `MiniCPM5-1B-Q4_K_M.gguf` | ~76 |
+
+For reference, these were ~9–10× (`bitcpm4-0.5b`: 19.6 → 188 tok/s) and ~7× (`MiniCPM5-1B-Q4_K_M`: 10.7 → 76 tok/s) faster than the scalar fallback before the NEON kernels. Decode throughput is sensitive to thread count: on this M4, `--threads 8` outperformed both fewer threads and the full 10 (the efficiency cores add contention past 8 on this bandwidth/compute-mixed workload).
 
 ## 📝 TODO list
 

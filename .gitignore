@@ -2,6 +2,10 @@
 Thumbs.db
 .vscode/
 
+tmp/
+tmp/*
+tmp/*.*
+docs/
 build/
 build/*
 build/*.*
