@@ -200,6 +200,15 @@ struct llm_hparams {
     }
     bool has_kv(uint32_t il) const { return true;}
 
+    // qwen35 hybrid layer dispatch: a layer is full-attention iff
+    // il % n_full_attention_interval == n_full_attention_interval - 1
+    // (pattern L,L,L,F for interval 4). Linear-attention layers use the
+    // gated DeltaNet path instead of KV-cache attention.
+    bool is_full_attention(uint32_t il) const {
+        if (n_full_attention_interval == 0) return false;
+        return (il % n_full_attention_interval) == (n_full_attention_interval - 1);
+    }
+
     uint32_t n_embd                 = 512;
     uint32_t n_layer                = 32;
     uint32_t n_ctx_train            = 1024;
@@ -237,6 +246,16 @@ struct llm_hparams {
 
     std::array<uint32_t, LLM_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLM_MAX_LAYERS> n_head_kv_arr;
+
+    // qwen35 ssm / hybrid linear-attention hparams
+    uint32_t n_ssm_conv_kernel          = 0;
+    uint32_t n_ssm_state_size           = 0;
+    uint32_t n_ssm_group_count          = 0;
+    uint32_t n_ssm_time_step_rank       = 0;
+    uint32_t n_ssm_inner_size           = 0;
+    uint32_t n_full_attention_interval  = 0;
+    uint32_t n_rotary_dim               = 0;     // partial rotary: # of head dims rotated
+    std::array<int32_t, 4> rope_dimension_sections = {0, 0, 0, 0};   // mRoPE section split
 };
 
 class llm_kv_cells;
@@ -378,6 +397,41 @@ private:
 };
 
 using slot_info = llm_kv_cache::slot_info;
+
+
+/**
+ * llm_ssm_state: per-layer recurrent state store for Qwen3.5 hybrid
+ * linear-attention (GatedDeltaNet) layers — the linear-attention analogue of
+ * llm_kv_cache. Each linear-attention layer owns two persistent F32 tensors,
+ * allocated in KV memory (so they survive clear_activation_buffers() across
+ * ubatches, exactly like the KV tensors):
+ *   - conv_state      : [kernel, conv_dim]     — the short-conv recurrent state
+ *                                                  read-modify-written by ssm_conv_update.
+ *   - recurrent_state : [v_dim, k_dim, num_heads] — the delta-rule state S
+ *                                                  read-modify-written by ssm_delta_update.
+ *
+ * Both vectors are indexed by LINEAR-LAYER order (0..n_linear-1), in the order
+ * the linear layers are encountered when iterating il in [0, n_layer). The
+ * graph builder (Task 6) consumes these by holding its own linear-layer counter
+ * as it walks layers, mirroring how it iterates KV-cache layers.
+ *
+ * For non-hybrid models (n_ssm_conv_kernel == 0, e.g. bitcpm4) init() is a
+ * no-op: zero states are allocated and the store is inert.
+ */
+struct llm_ssm_state {
+    std::vector<nnml_tensor *> conv_states;       // [n_linear]
+    std::vector<nnml_tensor *> recurrent_states;  // [n_linear]
+
+    llm_ssm_state() = default;
+
+    // Allocate + zero-init the per-linear-layer state tensors in KV memory.
+    // ttype should be NNML_TENSOR_TYPE_KVCACHE so they land in the kv_buffer
+    // and persist across ubatches (mirroring llm_kv_cache tensor allocation).
+    void init(nnml_memory_t& mem, nnml_tensor_type ttype, int32_t buffer_id,
+              const llm_hparams& hparams, bool is_print = false);
+
+    size_t n_linear() const noexcept { return conv_states.size(); }
+};
 
 
 /**

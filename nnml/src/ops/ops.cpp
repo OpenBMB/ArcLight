@@ -5,6 +5,7 @@
 
 #include "ops.h"
 #include "tensor.h"
+#include "ssm.h"
 #include "arm/tq2_i2s.h"
 
 #ifndef M_PI
@@ -1452,6 +1453,79 @@ void nnml_compute_forward_cpy(nnml_tensor * node, const nnml_compute_state * par
     nnml_compute_forward_dup(node, params);
 }
 
+// nnml_ssm_conv_update: depthwise causal Conv1d recurrent update for one token.
+//
+// Side-effecting op (mirrors NNML_OP_SET_ROWS): src[1] is the persistent conv
+// state in KV memory; compute reads it, rolls in the new input x (src[0]),
+// dot-products with the depthwise weight (src[2]), and writes SiLU(...) to the
+// node's own data (src[1] is mutated in place so the rolled state persists for
+// the next token). Per-token decode work is small, so it runs single-threaded
+// (thread 0 only) — parallelization is future work.
+void nnml_compute_forward_ssm_conv_update(nnml_tensor * node, const nnml_compute_state * params) {
+    const nnml_tensor * x         = node->get_src_tensor(0);
+    nnml_tensor *       conv_state = node->get_src_tensor(1);   // mutated
+    const nnml_tensor * weight     = node->get_src_tensor(2);
+
+    // conv_state shape is [kernel, conv_dim] (ne[0]=kernel, ne[1]=conv_dim);
+    // its flat row-major buffer is exactly [conv_dim, kernel] channel-major,
+    // which is the layout nnml_ssm_conv1d_update* indexes.
+    const int kernel   = (int) conv_state->get_elements(0);
+    const int conv_dim = (int) conv_state->get_elements(1);
+    const int n_tokens = (x->n_dims() >= 2) ? (int) x->get_elements(1) : 1;
+
+    const float * x_data       = (const float *) x->tensor_data();
+    float *       state_data   = (float *)       conv_state->tensor_data();
+    const float * weight_data  = (const float *) weight->tensor_data();
+    float *       out_data     = (float *)       node->tensor_data();
+
+    // Multi-token + threaded: channels are parallelized across threads (ith/nth),
+    // tokens run sequentially (state rolls each step). Replaces the prior token-0-only,
+    // thread-0-only compute.
+    nnml_ssm_conv1d_update_seq(x_data, x->get_stride_bytes(1),
+                               state_data, weight_data, conv_dim, kernel, n_tokens,
+                               out_data, node->get_stride_bytes(1),
+                               params->ith, params->nth);
+}
+
+// nnml_ssm_delta_update: gated delta-rule recurrent update, all heads.
+//
+// Side-effecting op: src[5] is the persistent recurrent state in KV memory
+// ([v_dim, k_dim, num_heads]); compute loops heads, calling the per-head
+// nnml_ssm_gated_delta_rule_update which read-modify-writes each head's [k_dim,
+// v_dim] block. Per-head output is written into the node's [v_dim, num_heads]
+// data. Runs single-threaded (thread 0 only) — per-token decode is small.
+void nnml_compute_forward_ssm_delta_update(nnml_tensor * node, const nnml_compute_state * params) {
+    const nnml_tensor * q   = node->get_src_tensor(0);
+    const nnml_tensor * k   = node->get_src_tensor(1);
+    const nnml_tensor * v   = node->get_src_tensor(2);
+    const nnml_tensor * g   = node->get_src_tensor(3);
+    const nnml_tensor * beta = node->get_src_tensor(4);
+    nnml_tensor *       S    = node->get_src_tensor(5);          // mutated
+
+    // recurrent_state shape is [v_dim, k_dim, num_heads]; head h's S block is the
+    // contiguous [k_dim, v_dim] row-major region at offset h*k_dim*v_dim.
+    const int v_dim     = (int) S->get_elements(0);
+    const int k_dim     = (int) S->get_elements(1);
+    const int num_heads = (int) S->get_elements(2);
+    const int n_tokens  = (q->n_dims() >= 3) ? (int) q->get_elements(2) : 1;
+
+    // g/beta are [num_heads, n_tokens] in the graph; if a 1-D [num_heads] tensor is
+    // passed (one gate per head reused across tokens), token stride 0 reads g[h] for all t.
+    const size_t g_tok = (g->n_dims()    >= 2) ? g->get_stride_bytes(1)    : 0;
+    const size_t b_tok = (beta->n_dims() >= 2) ? beta->get_stride_bytes(1) : 0;
+
+    // Multi-token + threaded: heads parallel across threads (ith/nth), tokens sequential
+    // (S mutates per token). Replaces the prior token-0-only, thread-0-only compute.
+    nnml_ssm_delta_rule_update_seq((const float *) q->tensor_data(), q->get_stride_bytes(2),
+                                   (const float *) k->tensor_data(), k->get_stride_bytes(2),
+                                   (const float *) v->tensor_data(), v->get_stride_bytes(2),
+                                   (const float *) g->tensor_data(), g_tok,
+                                   (const float *) beta->tensor_data(), b_tok,
+                                   (float *) S->tensor_data(), k_dim, v_dim, num_heads, n_tokens,
+                                   (float *) node->tensor_data(), node->get_stride_bytes(2),
+                                   params->ith, params->nth);
+}
+
 void nnml_compute_forward_norm(nnml_tensor * node, const nnml_compute_state * params) {
     assert(0);
 }
@@ -1512,8 +1586,56 @@ void nnml_compute_forward_rope(nnml_tensor * node, const nnml_compute_state * pa
     }
 }
 
+void nnml_compute_forward_log(nnml_tensor * node, const nnml_compute_state * params) {
+    const nnml_tensor * src0 = node->get_src_tensor(0);
+    NNML_ASSERT(src0->get_data_type() == NNML_TYPE_F32);
+    NNML_ASSERT(src0->get_stride_bytes(0) == sizeof(float));
+    const int ith = params->ith;
+    const int nth = params->nth;
+    NNML_TENSOR_UNARY_OP_LOCALS
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (const float *) ((char *) src0->tensor_data() + i01*nb01 + i02*nb02 + i03*nb03);
+                float * y = (float *) ((char *) node->tensor_data() + i01*nb1 + i02*nb2 + i03*nb3);
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    y[i00] = logf(x[i00]);
+                }
+            }
+        }
+    }
+}
+
 void nnml_compute_forward_unary(nnml_tensor * node, const nnml_compute_state * params) {
-    assert(0);
+    const nnml_tensor * src0 = node->get_src_tensor(0);
+    const nnml_unary_op op = (nnml_unary_op) node->get_operation_params()[0];
+    NNML_ASSERT(src0->get_data_type() == NNML_TYPE_F32);
+    NNML_ASSERT(src0->get_stride_bytes(0) == sizeof(float));
+    const int ith = params->ith;
+    const int nth = params->nth;
+    NNML_TENSOR_UNARY_OP_LOCALS
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (const float *) ((char *) src0->tensor_data() + i01*nb01 + i02*nb02 + i03*nb03);
+                float * y = (float *) ((char *) node->tensor_data() + i01*nb1 + i02*nb2 + i03*nb3);
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    switch (op) {
+                        case NNML_UNARY_OP_ABS:     y[i00] = fabsf(x[i00]); break;
+                        case NNML_UNARY_OP_SGN:     y[i00] = (x[i00] > 0.0f) ? 1.0f : ((x[i00] < 0.0f) ? -1.0f : 0.0f); break;
+                        case NNML_UNARY_OP_ELU:     y[i00] = x[i00] > 0.0f ? x[i00] : (expf(x[i00]) - 1.0f); break;
+                        case NNML_UNARY_OP_RELU:    y[i00] = x[i00] > 0.0f ? x[i00] : 0.0f; break;
+                        case NNML_UNARY_OP_SIGMOID: y[i00] = 1.0f / (1.0f + expf(-x[i00])); break;
+                        case NNML_UNARY_OP_GELU:    { const float t = 0.7978845608028654f * (x[i00] + 0.044715f * x[i00] * x[i00] * x[i00]); y[i00] = 0.5f * x[i00] * (1.0f + tanhf(t)); } break;
+                        case NNML_UNARY_OP_SILU:    y[i00] = x[i00] / (1.0f + expf(-x[i00])); break;
+                        case NNML_UNARY_OP_TANH:    y[i00] = tanhf(x[i00]); break;
+                        case NNML_UNARY_OP_EXP:     y[i00] = expf(x[i00]); break;
+                        default: NNML_ABORT("nnml_compute_forward_unary: op %d not implemented", (int) op);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void nnml_compute_forward_glu(nnml_tensor * node, const nnml_compute_state * params) {

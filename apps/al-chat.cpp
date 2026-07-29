@@ -132,6 +132,9 @@ int32_t main(int32_t argc, char** argv) {
     uint32_t n_pad = is_fattn ? 256u : 32u;
     llm_kv_cache * kvcache = new llm_kv_cache(type_k, type_v, false, true, max_length, 1, n_pad,
                                               model.hparams, mem, n_nodes, is_print_kv);
+    // qwen3.5 hybrid linear-attention recurrent state (no-op for non-hybrid models)
+    model.ssm_state = new llm_ssm_state();
+    model.ssm_state->init(mem, NNML_TENSOR_TYPE_KVCACHE, 0, model.hparams, is_print_kv);
     model.cgraph = new nnml_cgraph(model.get_n_tensors(), model.hparams, mem, is_tp, n_nodes,
                                    model.name, is_fattn, false, true, kvcache);
 

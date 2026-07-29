@@ -266,6 +266,33 @@ nnml_tensor * nnml_pad(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t
 nnml_tensor * nnml_get_rows(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, nnml_tensor * b);
 nnml_tensor * nnml_set_rows(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, nnml_tensor * b, nnml_tensor * c);
 
+// Side-effecting Qwen3.5 linear-attention recurrent-state graph ops.
+//
+// nnml_ssm_conv_update: depthwise causal Conv1d recurrent update for one token.
+//   x          : [conv_dim] f32 activation — this token's pre-conv projection.
+//   conv_state : [kernel, conv_dim] f32 PERSISTENT KV tensor (row-major
+//                [conv_dim, kernel]: channel c's `kernel` taps are contiguous,
+//                matching nnml_ssm_conv1d_update's layout). READ-MODIFY-WRITTEN.
+//   weight     : [kernel, conv_dim] f32 depthwise Conv1d weight (same layout).
+//   -> node    : [conv_dim] f32 — SiLU(conv1d(rolled_state, weight)).
+//   kernel/conv_dim are derived from conv_state's shape (ne[0]=kernel, ne[1]=conv_dim).
+nnml_tensor * nnml_ssm_conv_update(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx,
+                                   nnml_tensor * x, nnml_tensor * conv_state, nnml_tensor * weight);
+
+// nnml_ssm_delta_update: gated delta-rule recurrent update, looping all heads.
+//   q, k        : [k_dim, num_heads] f32 per-head-strided (head h at offset h*k_dim).
+//   v           : [v_dim, num_heads] f32 per-head-strided (head h at offset h*v_dim).
+//   g, beta     : [num_heads] f32 per-head gate (pre-exp) / beta scalars.
+//   recurrent_state : [v_dim, k_dim, num_heads] f32 PERSISTENT KV tensor (each
+//                head's S is a contiguous [k_dim, v_dim] row-major block at
+//                offset h*k_dim*v_dim). READ-MODIFY-WRITTEN per head.
+//   -> node    : [v_dim, num_heads] f32 — per-head delta-rule output.
+//   v_dim/k_dim/num_heads derived from recurrent_state's shape
+//   (ne[0]=v_dim, ne[1]=k_dim, ne[2]=num_heads).
+nnml_tensor * nnml_ssm_delta_update(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx,
+                                    nnml_tensor * q, nnml_tensor * k, nnml_tensor * v,
+                                    nnml_tensor * g, nnml_tensor * beta, nnml_tensor * recurrent_state);
+
 static nnml_tensor * nnml_unary_impl(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, enum nnml_unary_op op, bool inplace);
 nnml_tensor * nnml_unary(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, enum nnml_unary_op op);
 nnml_tensor * nnml_unary_inplace(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, enum nnml_unary_op op);

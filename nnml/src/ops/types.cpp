@@ -58,7 +58,7 @@ const nnml_type_traits type_traits[NNML_TYPE_COUNT] = {
     place_holder,
     place_holder,
     make_type_traits("q4_K", QK_K, -1, sizeof(block_q4_K), true, (nnml_to_float_t) dequantize_row_q4_K, nullptr, nullptr, nnml_vec_dot_q4_K_q8_K, NNML_TYPE_Q8_K, 1),
-    place_holder,
+    make_type_traits("q5_K", QK_K, -1, sizeof(block_q5_K), true, (nnml_to_float_t) dequantize_row_q5_K, nullptr, nullptr, nnml_vec_dot_q5_K_q8_K, NNML_TYPE_Q8_K, 1),
     make_type_traits("q6_K", QK_K, -1, sizeof(block_q6_K), true, (nnml_to_float_t) dequantize_row_q6_K, (nnml_from_float_t) quantize_row_q6_K_ref, nullptr, nnml_vec_dot_q6_K_q8_K, NNML_TYPE_Q8_K, 1),
     make_type_traits("q8_K", QK_K, -1, sizeof(block_q8_K), true, nullptr, nullptr, quantize_row_q8_K),
     place_holder,
@@ -457,6 +457,73 @@ void nnml_vec_dot_q4_K_q8_K_ref(
 
     for (int ib = 0; ib < nb; ++ib) {
         dequantize_row_q4_K(x + ib, values, QK_K);
+        const float yd = y[ib].d;
+        for (int j = 0; j < QK_K; ++j) {
+            sum += values[j] * yd * y[ib].qs[j];
+        }
+    }
+    *s = sum;
+}
+
+// Q5_K - 5-bit super-block quantization (same super-block layout as Q4_K plus a
+// 1-bit high array `qh[QK_K/8]`, one bit per element). x = d*sc*q - dmin*m, where
+// q is the 5-bit value ((low nibble of qs) | (qh bit << 4)). Portable reference
+// dequant + dot (sufficient to run Q4_K_M models whose in_proj_qkv is Q5_K).
+void dequantize_row_q5_K(const block_q5_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const uint8_t * q  = x[i].qs;
+        const uint8_t * qh = x[i].qh;
+        const float d    = NNML_FP16_TO_FP32(x[i].d);
+        const float dmin = NNML_FP16_TO_FP32(x[i].dmin);
+        int is = 0;
+
+        for (int j = 0; j < QK_K; j += 64) {
+            uint8_t sc, m;
+            get_scale_min_k4(is++, x[i].scales, &sc, &m);
+            const float d1 = d * sc; const float m1 = dmin * m;
+            get_scale_min_k4(is++, x[i].scales, &sc, &m);
+            const float d2 = d * sc; const float m2 = dmin * m;
+            for (int l = 0; l < 32; ++l) {
+                const int el = j + l;
+                const uint8_t hb = (qh[el >> 3] >> (el & 7)) & 1;
+                *y++ = d1 * (float)((q[l] & 0x0F) | (hb << 4)) - m1;
+            }
+            for (int l = 0; l < 32; ++l) {
+                const int el = j + 32 + l;
+                const uint8_t hb = (qh[el >> 3] >> (el & 7)) & 1;
+                *y++ = d2 * (float)((q[l] >> 4) | (hb << 4)) - m2;
+            }
+            q += 32;
+        }
+    }
+}
+
+void nnml_vec_dot_q5_K_q8_K(
+        int n,
+        float * NNML_RESTRICT s,
+        size_t bs,
+        const void * NNML_RESTRICT vx,
+        size_t bx,
+        const void * NNML_RESTRICT vy,
+        size_t by,
+        int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    NNML_UNUSED(bs);
+    NNML_UNUSED(bx);
+    NNML_UNUSED(by);
+
+    const block_q5_K * NNML_RESTRICT x = (const block_q5_K *) vx;
+    const block_q8_K * NNML_RESTRICT y = (const block_q8_K *) vy;
+    const int nb = n / QK_K;
+    float values[QK_K];
+    float sum = 0.0f;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        dequantize_row_q5_K(x + ib, values, QK_K);
         const float yd = y[ib].d;
         for (int j = 0; j < QK_K; ++j) {
             sum += values[j] * yd * y[ib].qs[j];

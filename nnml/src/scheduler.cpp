@@ -87,6 +87,10 @@ void nnml_compute_node(nnml_tensor * node, const nnml_compute_state * params) {
             {
                 nnml_compute_forward_unary(node, params);
             } break;
+        case NNML_OP_LOG:
+            {
+                nnml_compute_forward_log(node, params);
+            } break;
         case NNML_OP_GLU:
             {
                 nnml_compute_forward_glu(node, params);
@@ -115,6 +119,14 @@ void nnml_compute_node(nnml_tensor * node, const nnml_compute_state * params) {
         case NNML_OP_GATHER:
             {
                 nnml_compute_forward_gather(node, const_cast<nnml_compute_state*>(params));
+            } break;
+        case NNML_OP_SSM_CONV_UPDATE:
+            {
+                nnml_compute_forward_ssm_conv_update(node, params);
+            } break;
+        case NNML_OP_SSM_DELTA_UPDATE:
+            {
+                nnml_compute_forward_ssm_delta_update(node, params);
             } break;
         case NNML_OP_NONE:          // nop
             break;

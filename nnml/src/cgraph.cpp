@@ -7,6 +7,7 @@
  */
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #if !defined(_WIN32)
 #include <time.h>
 #endif
@@ -989,6 +990,62 @@ llm_kv_cache::llm_kv_cache(
                 (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
                 nnml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 nnml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+    }
+}
+
+// implementation of llm_ssm_state
+void llm_ssm_state::init(nnml_memory_t& mem, nnml_tensor_type ttype, int32_t buffer_id,
+                         const llm_hparams& hparams, bool is_print) {
+    conv_states.clear();
+    recurrent_states.clear();
+
+    // Only hybrid linear-attention models (qwen3.5) carry an ssm conv config.
+    // For anything else (e.g. bitcpm4) this is an inert no-op: 0 states.
+    if (hparams.n_ssm_conv_kernel == 0) {
+        return;
+    }
+
+    const int64_t kernel    = (int64_t) hparams.n_ssm_conv_kernel;   // = 4
+    const int64_t num_heads = (int64_t) hparams.n_ssm_group_count;   // = 16
+    const int64_t k_dim     = (int64_t) hparams.n_ssm_state_size;    // = 128 (head_k_dim)
+    const int64_t v_dim     = (int64_t) hparams.n_ssm_state_size;    // k_dim == v_dim for qwen3.5
+    // conv_dim = in_proj_qkv output width = 2*key_dim + value_dim (q | k | v concatenation).
+    // NB: n_ssm_inner_size == key_dim == value_dim == num_heads*head_dim, NOT conv_dim.
+    const int64_t key_dim   = num_heads * k_dim;                      // 2048
+    const int64_t value_dim = num_heads * v_dim;                      // 2048
+    const int64_t conv_dim  = 2 * key_dim + value_dim;                // 6144
+
+    NNML_ASSERT(kernel > 0 && conv_dim > 0 && num_heads > 0 && k_dim > 0 && v_dim > 0);
+
+    size_t total_bytes = 0;
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        // Full-attention layers (every n_full_attention_interval-th) use the KV
+        // cache unchanged; only the linear-attention layers get ssm state.
+        if (hparams.is_full_attention(il)) {
+            continue;
+        }
+
+        // conv_state: [kernel, conv_dim] f32 (row-major [conv_dim, kernel]).
+        nnml_tensor * cs = tensor_new_2d(mem, ttype, buffer_id, 0, NNML_TYPE_F32, kernel, conv_dim);
+        cs->set_name("ssm_conv_state-%d", (int) il);
+        std::memset(cs->tensor_data(), 0, nnml_nbytes(cs));
+        conv_states.push_back(cs);
+        total_bytes += nnml_nbytes(cs);
+
+        // recurrent_state: [v_dim, k_dim, num_heads] f32 (each head a contiguous
+        // [k_dim, v_dim] block). Zero-init = empty recurrent state at generation start.
+        nnml_tensor * rs = tensor_new_3d(mem, ttype, buffer_id, 0, NNML_TYPE_F32, v_dim, k_dim, num_heads);
+        rs->set_name("ssm_recurrent_state-%d", (int) il);
+        std::memset(rs->tensor_data(), 0, nnml_nbytes(rs));
+        recurrent_states.push_back(rs);
+        total_bytes += nnml_nbytes(rs);
+    }
+
+    if (is_print) {
+        NNML_LOG("%s: %3zu linear-attention layers, ssm recurrent state = %7.2f MiB (conv_kernel=%u, conv_dim=%u, heads=%u, k_dim=v_dim=%u)\n",
+                __func__, conv_states.size(), (float) total_bytes / (1024.0f * 1024.0f),
+                hparams.n_ssm_conv_kernel, (uint32_t) conv_dim,
+                hparams.n_ssm_group_count, hparams.n_ssm_state_size);
     }
 }
 

@@ -29,7 +29,7 @@ if(NEON)
     if(MSVC)
         # MSVC targets ARM64 NEON through the selected toolchain/architecture.
     else()
-        add_compile_options(-march=armv8.2-a+dotprod+fp16)
+        add_compile_options(-march=armv8.2-a+dotprod+fp16+i8mm)   # +i8mm activates the optimized Q6_K vec_dot (LM head is Q6_K)
         add_compile_options(-ffp-contract=fast)
     endif()
     # add_compile_options(-mcpu=tsv110+dotprod+fp16)
@@ -112,3 +112,6 @@ target_link_libraries(test-q4-k PRIVATE nnml)
 
 add_executable(test-tq2-0 ${CMAKE_CURRENT_SOURCE_DIR}/test/test-tq2-0.cpp)
 target_link_libraries(test-tq2-0 PRIVATE nnml)
+
+add_executable(test-ssm ${CMAKE_CURRENT_SOURCE_DIR}/test/test-ssm.cpp)
+target_link_libraries(test-ssm PRIVATE nnml)

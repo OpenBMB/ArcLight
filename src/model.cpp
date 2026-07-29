@@ -211,6 +211,23 @@ void llm_model::load_gguf_kv(bool is_print) {
                         LLM_LOG(is_print, "merges array...\n");
                         break;
                     }
+                    case LLM_ROPE_DIMENSION_SECTIONS: {
+                        // qwen35 mRoPE section split, e.g. [11,11,10,0]
+                        std::vector<int32_t> sections;
+                        read_array_i32(f, sections);
+                        for (size_t j = 0; j < sections.size() && j < hparams.rope_dimension_sections.size(); ++j) {
+                            hparams.rope_dimension_sections[j] = sections[j];
+                        }
+                        if (is_print) {
+                            printf("[");
+                            for (size_t j = 0; j < sections.size(); ++j) {
+                                if (j) printf(", ");
+                                printf("%d", sections[j]);
+                            }
+                            printf("]\n");
+                        }
+                        break;
+                    }
                     default:
                         print_array(f, is_print);
                         break;
@@ -339,6 +356,35 @@ void llm_model::load_gguf_kv(bool is_print) {
                         tokenizer_data.add_space_prefix = (bool)r_u8(f);
                         tokenizer_data.read_add_space_prefix = true;
                         LLM_LOG(is_print, "%u\n", tokenizer_data.add_space_prefix);
+                        break;
+                    // qwen35 ssm / hybrid linear-attention hparams
+                    case LLM_SSM_CONV_KERNEL:
+                        hparams.n_ssm_conv_kernel = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_ssm_conv_kernel);
+                        break;
+                    case LLM_SSM_STATE_SIZE:
+                        hparams.n_ssm_state_size = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_ssm_state_size);
+                        break;
+                    case LLM_SSM_GROUP_COUNT:
+                        hparams.n_ssm_group_count = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_ssm_group_count);
+                        break;
+                    case LLM_SSM_TIME_STEP_RANK:
+                        hparams.n_ssm_time_step_rank = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_ssm_time_step_rank);
+                        break;
+                    case LLM_SSM_INNER_SIZE:
+                        hparams.n_ssm_inner_size = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_ssm_inner_size);
+                        break;
+                    case LLM_FULL_ATTENTION_INTERVAL:
+                        hparams.n_full_attention_interval = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_full_attention_interval);
+                        break;
+                    case LLM_ROPE_DIMENSION_COUNT:
+                        hparams.n_rotary_dim = r_u32(f);
+                        LLM_LOG(is_print, "%u\n", hparams.n_rotary_dim);
                         break;
                     default:
                         // consume but ignore other known params for now
@@ -478,11 +524,20 @@ bool llm_model::load_all_tensors(std::map<std::string, llm_weight_item> & weight
                 tensor_type_str = tensor_name.substr(end);
             }
         }
-        for (auto &pair : weight_map) {
-            const std::string &key = std::string(pair.first);
+        // pick the longest matching key so that a short key cannot shadow a longer one
+        // (e.g. "ssm_a" must not match the "ssm_alpha.weight" tensor)
+        auto best_it = weight_map.cend();
+        for (auto it = weight_map.cbegin(); it != weight_map.cend(); ++it) {
+            const std::string &key = it->first;
             if (tensor_type_str.find(key) != std::string::npos) {
-                llm_weight_item item = pair.second;
-                switch (item) {
+                if (best_it == weight_map.cend() || key.size() > best_it->first.size()) {
+                    best_it = it;
+                }
+            }
+        }
+        if (best_it != weight_map.cend()) {
+            llm_weight_item item = best_it->second;
+            switch (item) {
                     case LLM_TOKEN_EMBEDDINGS:
                         tok_embd = weight_tensor;
                         break;
@@ -540,12 +595,46 @@ bool llm_model::load_all_tensors(std::map<std::string, llm_weight_item> & weight
                         rope_short = weight_tensor;
                         for (int i = 0; i < layers.size(); ++i) layers[i].rope_short = rope_short;
                         break;
+                    // qwen35 hybrid linear-attention per-layer tensors.
+                    // These are stored per-layer; absent tensors on a given layer
+                    // (e.g. ssm_* on a full-attn layer) simply never hit this case,
+                    // which is the intended load behavior.
+                    case LLM_POST_ATTENTION_NORM:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[POST_ATTENTION_NORM], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_ATTENTION_QKV:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[ATTENTION_QKV], LLM_WEIGHT_SLICE_NONE, n_tensor_nodes, n_attn_hdim);
+                        if (is_asm_gemm) set_asm_gemm(layers[layer_idx].tensors[ATTENTION_QKV]);
+                        break;
+                    case LLM_ATTENTION_GATE:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[ATTENTION_GATE], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_CONV1D:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_CONV1D], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_A:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_A], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_ALPHA:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_ALPHA], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_BETA:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_BETA], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_DT:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_DT], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_NORM:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_NORM], LLM_WEIGHT_SLICE_NONE, 1, 0);
+                        break;
+                    case LLM_SSM_OUT:
+                        slice_tensor(mem, weight_tensor, tensor_meta[i].nbytes, layers[layer_idx].tensors[SSM_OUT], LLM_WEIGHT_SLICE_NONE, n_tensor_nodes, 0);
+                        if (is_asm_gemm) set_asm_gemm(layers[layer_idx].tensors[SSM_OUT]);
+                        break;
                     default:
                         LLM_ERROR("unhandled weight item %d for tensor %s\n", item, tensor_meta[i].name.c_str());
                         break;
                 }
-                break;
-            }
         }
     }
     LLM_LOG(true, "\nAll %ld tensors loaded successfully.\n", n_tensors);

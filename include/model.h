@@ -60,6 +60,15 @@ enum llm_hparams_item {
     LLM_EMBEDDING_SCALE,
     LLM_RESIDUAL_SCALE,
     LLM_LOGIT_SCALE,
+    // qwen35 hybrid linear-attention hparams
+    LLM_SSM_CONV_KERNEL,
+    LLM_SSM_STATE_SIZE,
+    LLM_SSM_GROUP_COUNT,
+    LLM_SSM_TIME_STEP_RANK,
+    LLM_SSM_INNER_SIZE,
+    LLM_FULL_ATTENTION_INTERVAL,
+    LLM_ROPE_DIMENSION_COUNT,           // partial rotary dimension count
+    LLM_ROPE_DIMENSION_SECTIONS,        // mRoPE section split (int32 array)
 };
 
 /** type of every weight item, for building map elsewhere */
@@ -80,6 +89,17 @@ enum llm_weight_item {
     LLM_FFN_NORM,
     LLM_ROPE_LONG,
     LLM_ROPE_SHORT,
+    // qwen35 hybrid linear-attention weights
+    LLM_POST_ATTENTION_NORM,    // post-attention RMSNorm (qwen3.5 pattern)
+    LLM_ATTENTION_QKV,          // fused QKV in-proj (linear-attention layers)
+    LLM_ATTENTION_GATE,         // per-layer attention output gate
+    LLM_SSM_CONV1D,
+    LLM_SSM_A,
+    LLM_SSM_ALPHA,
+    LLM_SSM_BETA,
+    LLM_SSM_DT,
+    LLM_SSM_NORM,
+    LLM_SSM_OUT,
 };
 
 // weight slicing strategy
@@ -99,6 +119,11 @@ enum layer_tensor_type {
     WQ, WK, WV, WO,
     ATTN_NORM, ATTN_Q_NORM, ATTN_K_NORM,
     FFN_GATE, FFN_DOWN, FFN_UP, FFN_NORM,
+    // qwen35 hybrid linear-attention per-layer tensors
+    POST_ATTENTION_NORM,
+    ATTENTION_QKV,
+    ATTENTION_GATE,
+    SSM_CONV1D, SSM_A, SSM_ALPHA, SSM_BETA, SSM_DT, SSM_NORM, SSM_OUT,
     LAYER_TENSOR_COUNT
 };
 
@@ -163,6 +188,7 @@ struct llm_model {
     vocab_data        tokenizer_data;
 
     nnml_cgraph * cgraph = nullptr;                 // maybe deprecated, cgraph should not be tightly coupled with the model
+    llm_ssm_state * ssm_state = nullptr;            // per-linear-layer recurrent state for qwen3.5 hybrid attention (Task 5); nullptr for non-hybrid models
     nnml_tensor * tok_embd        = nullptr;
     nnml_tensor * output_norm     = nullptr;
     nnml_tensor * output          = nullptr;

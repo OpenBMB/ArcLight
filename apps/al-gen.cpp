@@ -114,6 +114,9 @@ int32_t main(int32_t argc, char** argv) {
     uint32_t n_pad = is_fattn ? 256u : 32u;
     llm_kv_cache * kvcache = new llm_kv_cache(type_k, type_v, false, true, max_length, 1, n_pad,
                                               model.hparams, mem, n_nodes, is_print_kv);
+    // qwen3.5 hybrid linear-attention recurrent state (no-op for non-hybrid models)
+    model.ssm_state = new llm_ssm_state();
+    model.ssm_state->init(mem, NNML_TENSOR_TYPE_KVCACHE, 0, model.hparams, is_print_kv);
     model.cgraph = new nnml_cgraph(model.get_n_tensors(), model.hparams, mem, is_tp, n_nodes,
                                    model.name, is_fattn, false, true, kvcache);
     
@@ -126,7 +129,7 @@ int32_t main(int32_t argc, char** argv) {
     // decoding context
     printf("> %s\n", prompt.c_str());
     decoding_context ctx;
-    ctx.cparams = llm_cparams(max_length, 1024, 256, 1, n_nodes * n_thread_per_node,
+    ctx.cparams = llm_cparams(max_length, 1024, 256, 1, n_nodes * n_thread_per_node,   // n_ubatch=256: SSM conv/delta ops now handle multi-token prefill (token-sequential, head/channel-parallel)
                               10000.0f, 1.0f, is_fattn, !is_print_perf, true);
     ctx.scheduler = new nnml_scheduler();
     std::vector<nnml_cgraph *> graphs;

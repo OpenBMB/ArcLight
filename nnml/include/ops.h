@@ -112,7 +112,13 @@ enum nnml_op {
     NNML_OP_SCATTER_PRE = 29,
     NNML_OP_SCATTER     = 30,
     NNML_OP_GATHER      = 31,
-    NNML_OP_COUNT       = 32
+    // Side-effecting recurrent-state ops for Qwen3.5 hybrid linear-attention
+    // layers. Like NNML_OP_SET_ROWS, these mutate a persistent src tensor (the
+    // conv/recurrent state, allocated in KV memory) in place each ubatch; the
+    // node's own data is the freshly-computed activation output.
+    NNML_OP_SSM_CONV_UPDATE  = 32,
+    NNML_OP_SSM_DELTA_UPDATE = 33,
+    NNML_OP_COUNT       = 34
 };
 
 
@@ -350,6 +356,8 @@ void nnml_vec_dot_q6_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const voi
 void dequantize_row_q4_K(const block_q4_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
 void nnml_vec_dot_q4_K_q8_K_ref(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void nnml_vec_dot_q4_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
+void dequantize_row_q5_K(const block_q5_K * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
+void nnml_vec_dot_q5_K_q8_K(int n, float * NNML_RESTRICT s, size_t bs, const void * NNML_RESTRICT vx, size_t bx, const void * NNML_RESTRICT vy, size_t by, int nrc);
 void dequantize_row_q8_0(const block_q8_0 * NNML_RESTRICT x, float * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0_ref(const float * NNML_RESTRICT x, block_q8_0 * NNML_RESTRICT y, int64_t k);
 void quantize_row_q8_0(const float * NNML_RESTRICT x, void * NNML_RESTRICT vy, int64_t k);
@@ -445,6 +453,7 @@ void nnml_compute_forward_permute(nnml_tensor * node, const nnml_compute_state *
 void nnml_compute_forward_transpose(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_rope(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_unary(nnml_tensor * node, const nnml_compute_state * params);
+void nnml_compute_forward_log(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_glu(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_soft_max(nnml_tensor * node, const nnml_compute_state * params);
 void nnml_compute_forward_cont(nnml_tensor * node, const nnml_compute_state * params);
@@ -493,3 +502,7 @@ void nnml_compute_forward_soft_max_f32(nnml_tensor * node, const nnml_compute_st
 void nnml_compute_forward_scatter_pre(nnml_tensor * node, nnml_compute_state * params);
 void nnml_compute_forward_scatter(nnml_tensor * node, nnml_compute_state * params);
 void nnml_compute_forward_gather(nnml_tensor * node, nnml_compute_state * params);
+
+// ssm side-effecting recurrent-state graph ops (mutate a persistent KV src).
+void nnml_compute_forward_ssm_conv_update(nnml_tensor * node, const nnml_compute_state * params);
+void nnml_compute_forward_ssm_delta_update(nnml_tensor * node, const nnml_compute_state * params);

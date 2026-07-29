@@ -505,6 +505,80 @@ nnml_tensor * nnml_set_rows(nnml_memory_t& mem, nnml_tensor_type tensor_type, in
     return result;
 }
 
+nnml_tensor * nnml_ssm_conv_update(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx,
+                                   nnml_tensor * x, nnml_tensor * conv_state, nnml_tensor * weight) {
+    NNML_ASSERT(x != nullptr && conv_state != nullptr && weight != nullptr);
+    // conv_state is laid out [kernel, conv_dim] (ne[0]=kernel, ne[1]=conv_dim):
+    // channel c's `kernel` taps are contiguous, matching nnml_ssm_conv1d_update.
+    NNML_ASSERT(conv_state->n_dims() >= 2);
+    NNML_ASSERT(weight->get_elements(0)  == conv_state->get_elements(0));
+    NNML_ASSERT(weight->get_elements(1)  == conv_state->get_elements(1));
+    NNML_ASSERT(x->get_elements(0)       == conv_state->get_elements(1));   // x is [conv_dim]
+    NNML_ASSERT(x->get_data_type()       == NNML_TYPE_F32);
+    NNML_ASSERT(conv_state->get_data_type() == NNML_TYPE_F32);
+    NNML_ASSERT(weight->get_data_type()     == NNML_TYPE_F32);
+
+    const int64_t conv_dim = conv_state->get_elements(1);
+    // Token-aware output shape: if x carries a token dimension (2d [conv_dim, n_tokens]),
+    // mirror it so the builder can compose the result with other per-token tensors.
+    // The compute still reads/writes only the first (token-0) slice; prefill tokens >0
+    // are left untouched (decode-only correctness, sufficient for graph build + decode).
+    nnml_tensor * result;
+    if (x->n_dims() >= 2) {
+        const int64_t n_tokens = x->get_elements(1);
+        result = tensor_new_2d(mem, tensor_type, buffer_id, dual_idx, NNML_TYPE_F32, conv_dim, n_tokens);
+    } else {
+        result = tensor_new_1d(mem, tensor_type, buffer_id, dual_idx, NNML_TYPE_F32, conv_dim);
+    }
+    result->set_operation(NNML_OP_SSM_CONV_UPDATE);
+    result->set_src_tensor(0, x);            // this token's input
+    result->set_src_tensor(1, conv_state);   // persistent KV state (mutated by compute)
+    result->set_src_tensor(2, weight);       // depthwise conv weight
+    return result;
+}
+
+nnml_tensor * nnml_ssm_delta_update(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx,
+                                    nnml_tensor * q, nnml_tensor * k, nnml_tensor * v,
+                                    nnml_tensor * g, nnml_tensor * beta, nnml_tensor * recurrent_state) {
+    NNML_ASSERT(q != nullptr && k != nullptr && v != nullptr &&
+                g != nullptr && beta != nullptr && recurrent_state != nullptr);
+    // recurrent_state is [v_dim, k_dim, num_heads]; each head h owns a contiguous
+    // [k_dim, v_dim] row-major block at offset h*k_dim*v_dim.
+    NNML_ASSERT(recurrent_state->n_dims() >= 3);
+    const int64_t v_dim     = recurrent_state->get_elements(0);
+    const int64_t k_dim     = recurrent_state->get_elements(1);
+    const int64_t num_heads = recurrent_state->get_elements(2);
+
+    // q, k are [k_dim, num_heads]; v is [v_dim, num_heads]; g, beta are [num_heads].
+    NNML_ASSERT(q->get_elements(0) == k_dim && q->get_elements(1) == num_heads);
+    NNML_ASSERT(k->get_elements(0) == k_dim && k->get_elements(1) == num_heads);
+    NNML_ASSERT(v->get_elements(0) == v_dim && v->get_elements(1) == num_heads);
+    NNML_ASSERT(g->get_elements(0)    == num_heads);
+    NNML_ASSERT(beta->get_elements(0) == num_heads);
+    NNML_ASSERT(q->get_data_type() == NNML_TYPE_F32 && k->get_data_type() == NNML_TYPE_F32 &&
+                v->get_data_type() == NNML_TYPE_F32 && g->get_data_type() == NNML_TYPE_F32 &&
+                beta->get_data_type() == NNML_TYPE_F32 && recurrent_state->get_data_type() == NNML_TYPE_F32);
+
+    // Token-aware output shape: when q carries a token dimension (3d [k_dim, num_heads, n_tokens]),
+    // mirror it so the builder can compose the result with per-token tensors. The compute reads q/k/v
+    // as flat [k_dim*num_heads] (token-0 slice only); prefill tokens >0 are untouched (decode-only).
+    nnml_tensor * result;
+    if (q->n_dims() >= 3) {
+        const int64_t n_tokens = q->get_elements(2);
+        result = tensor_new_3d(mem, tensor_type, buffer_id, dual_idx, NNML_TYPE_F32, v_dim, num_heads, n_tokens);
+    } else {
+        result = tensor_new_2d(mem, tensor_type, buffer_id, dual_idx, NNML_TYPE_F32, v_dim, num_heads);
+    }
+    result->set_operation(NNML_OP_SSM_DELTA_UPDATE);
+    result->set_src_tensor(0, q);
+    result->set_src_tensor(1, k);
+    result->set_src_tensor(2, v);
+    result->set_src_tensor(3, g);
+    result->set_src_tensor(4, beta);
+    result->set_src_tensor(5, recurrent_state);   // persistent KV state (mutated by compute)
+    return result;
+}
+
 static nnml_tensor * nnml_unary_impl(nnml_memory_t& mem, nnml_tensor_type tensor_type, int32_t buffer_id, int32_t dual_idx, nnml_tensor * a, nnml_unary_op op, bool inplace) {
     NNML_ASSERT(a->is_contiguous_1());
     nnml_tensor * result = inplace ? tensor_view(mem, tensor_type, buffer_id, dual_idx, a)

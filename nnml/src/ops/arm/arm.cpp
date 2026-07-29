@@ -417,9 +417,9 @@ void nnml_vec_dot_q4_0_q8_0(int n, float * NNML_RESTRICT s, size_t bs, const voi
 
 #if defined(__ARM_FEATURE_MATMUL_INT8)
     if (nrc == 2) {
-        const block_q4_0 * NNML_RESTRICT vx0 = vx;
+        const block_q4_0 * NNML_RESTRICT vx0 = (const block_q4_0 *) vx;
         const block_q4_0 * NNML_RESTRICT vx1 = (const block_q4_0 *) ((const uint8_t*)vx + bx);
-        const block_q8_0 * NNML_RESTRICT vy0 = vy;
+        const block_q8_0 * NNML_RESTRICT vy0 = (const block_q8_0 *) vy;
         const block_q8_0 * NNML_RESTRICT vy1 = (const block_q8_0 *) ((const uint8_t*)vy + by);
 
         float32x4_t sumv0 = vdupq_n_f32(0.0f);

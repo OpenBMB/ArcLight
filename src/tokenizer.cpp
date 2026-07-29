@@ -1805,6 +1805,7 @@ void llm_vocab::impl::load(vocab_data & vocab_data) {
                 clean_spaces = false;
             } else if (
                     tokenizer_pre == "qwen2" ||
+                    tokenizer_pre == "qwen35" ||
                     tokenizer_pre == "deepseek-r1-qwen") {
                 pre_type = LLM_TOKENIZER_PRE_TYPE_QWEN2;
                 clean_spaces = false;
